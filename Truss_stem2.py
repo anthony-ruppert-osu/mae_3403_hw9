@@ -246,19 +246,32 @@ class TrussController():
         """
         #NEW
         for line in data:
-            if 'title,' in line:
-                self.truss.title = line.split("'")[1]
-            elif 'material,' in line:
-                _, uts, ys, modulus = line.split(',')
-                self.truss.material = Material(uts=float(uts.strip()), ys=float(ys.strip()),
-                                               modulus=float(modulus.strip()))
-            elif 'node,' in line:
-                _, name, x, y = line.split(',')
-                if not self.hasNode(name):
-                    self.addNode(Node(name=name.strip(), position=Position(x=float(x), y=float(y))))
-            elif 'link,' in line:
-                _, name, node1, node2 = line.split(',')
-                self.addLink(Link(name=name.strip(), node1=node1.strip(), node2=node2.strip()))
+            if len(line) > 1:
+                cells = line.strip().split(',')
+                if cells[0] == '#':
+                    pass
+                else:  # need to parse the line
+                    if cells[0].lower().strip() == 'title':
+                        self.truss.title = cells[1].replace("'", "").strip()
+                    elif cells[0].lower().strip() == 'material':
+                        self.truss.material.uts = float(cells[1].replace("'", "").strip())
+                        self.truss.material.ys = float(cells[2].replace("'", "").strip())
+                        self.truss.material.E = float(cells[1].replace("'", "").strip())
+                    elif cells[0].lower().strip() == 'static_factor':
+                        self.truss.material.staticFactor = float(cells[1].replace("'", "").strip())
+                    elif cells[0].lower().strip() == 'node':
+                        n = Node()
+                        n.name = cells[1].replace("'", "").strip()
+                        n.position.x = float(cells[2].replace("'", "").strip())
+                        n.position.y = float(cells[3].replace("'", "").strip())
+                        if not self.hasNode(n.name):
+                            self.addNode(n)
+                    elif cells[0].lower().strip() == 'link':
+                        l = Link()
+                        l.name = cells[1].replace("'", "").strip()
+                        l.node1_Name = cells[2].replace("'", "").strip()
+                        l.node2_Name = cells[3].replace("'", "").strip()
+                        self.addLink(l)
 
         self.calcLinkVals()
         self.displayReport()
@@ -405,40 +418,141 @@ class TrussView():
         :return: nothing
         """
         #NEW
-        for x in range(-Width // 2, Width // 2 + 1, DeltaX):
-            self.scene.addLine(CenterX + x, CenterY - Height // 2, CenterX + x, CenterY + Height // 2,
-                               self.penGridLines)
-        for y in range(-Height // 2, Height // 2 + 1, DeltaY):
-            self.scene.addLine(CenterX - Width // 2, CenterY + y, CenterX + Width // 2, CenterY + y, self.penGridLines)
-        pass
+        Pen = self.penGridLines
+        Brush = self.brushGrid
+        height = self.scene.sceneRect().height() if Height is None else Height
+        width = self.scene.sceneRect().width() if Width is None else Width
+        left = self.scene.sceneRect().left() if CenterX is None else (CenterX - width / 2.0)
+        right = self.scene.sceneRect().right() if CenterX is None else (CenterX + width / 2.0)
+        top = -1.0 * self.scene.sceneRect().top() if CenterY is None else (CenterY + height / 2.0)
+        bottom = -1.0 * self.scene.sceneRect().bottom() if CenterY is None else (CenterY - height / 2.0)
+        Dx = DeltaX
+        Dy = DeltaY
+        pen = qtg.QPen() if Pen is None else Pen
+
+        # make the background rectangle first
+        if Brush is not None:
+            rect = qtw.QGraphicsRectItem(left, -top, width, height)
+            rect.setBrush(Brush)
+            rect.setPen(pen)
+            self.scene.addItem(rect)
+        # draw the vertical grid lines
+        x = left
+        while x <= right:
+            lVert = qtw.QGraphicsLineItem(x, -top, x, -bottom)
+            lVert.setPen(pen)
+            self.scene.addItem(lVert)
+            x += Dx
+        # draw the horizontal grid lines
+        y = bottom
+        while y <= top:
+            lHor = qtw.QGraphicsLineItem(left, -y, right, -y)  # now flip y
+            lHor.setPen(pen)
+            self.scene.addItem(lHor)
+            y += Dy
 
     def drawLinks(self, truss=None):
         #NEW
-        for link in truss.links:
-            node1 = truss.getNode(link.node1_Name)
-            node2 = truss.getNode(link.node2_Name)
-            self.scene.addLine(node1.position.x, node1.position.y, node2.position.x, node2.position.y, self.penLink)
-        pass
+        scene = self.scene
+        penLink = self.penLink
+        for l in truss.links:
+            n1 = truss.getNode(l.node1_Name)
+            n2 = truss.getNode(l.node2_Name)
+
+            x1 = n1.position.x
+            y1 = n1.position.y
+            x2 = n2.position.x
+            y2 = n2.position.y
+            line = qtw.QGraphicsLineItem(x1, -y1, x2, -y2)  # $NEW$ 4/7/21 flip y axis
+
+            st = 'link: ' + l.name + '\n'
+            st += 'length = {:0.2f}\n'.format(l.length)
+            st += 'angle deg = {:0.2f}'.format(l.angleRad * 180.0 / math.pi)
+            # assign tool tip string
+            line.setToolTip(st)
+            line.setPen(self.penLink)
+            # add pipe to scene
+            scene.addItem(line)
 
     def drawNodes(self, truss=None, scene=None):
         #NEW
-        radius = 5  # assuming a small radius for the nodes
-        for node in truss.nodes:
-            self.drawACircle(node.position.x, node.position.y, radius, brush=self.brushNode, pen=self.penNode, name=node.name)
-        pass
+        if scene is None:
+            scene = self.scene
+        penNode = self.penNode
+        brushNode = self.brushNode
+        penNodeOutline = qtg.QPen() if penNode is None else penNode
+        penNodeLabel = qtg.QPen(qtc.Qt.darkMagenta)
+        for n in truss.nodes:
+            x = n.position.x
+            y = n.position.y
+
+            self.drawACircle(x, y, 7, brush=brushNode, pen=penNodeOutline, name=('node: ' + n.name))
+            self.drawALabel(x - 15, y + 15, str=n.name, pen=penNodeLabel)
 
     def drawALabel(self, x, y, str='', pen=None, brush=None, tip=None):
         #NEW
-        text = self.scene.addText(str, qtg.QFont("Arial", 10))
-        text.setPos(x, y)
-        text.setDefaultTextColor(pen.color() if pen else qtg.QColor(qtc.Qt.black))
-        if tip:
-            text.setToolTip(tip)
-        pass
+        scene = self.scene
+        lbl = qtw.QGraphicsTextItem(str)
+        w = lbl.boundingRect().width()
+        h = lbl.boundingRect().height()
+        lbl.setX(x - w / 2.0)
+        lbl.setY(-y - h / 2.0)
+        if tip is not None:
+            lbl.setToolTip(tip)
+        if pen is not None:
+            lbl.setDefaultTextColor(pen.color())
+        if brush is not None:
+            # this makes a nice background
+            bkg = qtw.QGraphicsRectItem(lbl.x(), lbl.y(), w, h)
+            bkg.setBrush(brush)
+            outlinePen = qtg.QPen(brush.color())
+            bkg.setPen(outlinePen)
+            scene.addItem(bkg)
+        scene.addItem(lbl)
 
     def drawACircle(self, centerX, centerY, Radius, angle=0, brush=None, pen=None, name=None, tooltip=None):
         #NEW
-        ellipse = self.scene.addEllipse(centerX - Radius, centerY - Radius, 2 * Radius, 2 * Radius, pen, brush)
-        if name:
-            ellipse.setToolTip(name)
-        pass
+        scene = self.scene
+        # ellipse = qtw.QGraphicsEllipseItem(centerX - Radius, centerY - Radius, 2 * Radius, 2 * Radius)
+        ellipse = qtw.QGraphicsEllipseItem(centerX - Radius, -1.0 * (centerY + Radius), 2 * Radius,
+                                           2 * Radius)  # $NEW$ 4/7/21 flip y
+        if pen is not None:
+            ellipse.setPen(pen)
+        if brush is not None:
+            ellipse.setBrush(brush)
+        if name is not None:
+            ellipse.setData(0, name)
+        if tooltip is not None:
+            ellipse.setToolTip(tooltip)
+        scene.addItem(ellipse)
+
+    def drawRigidSurface(self, centerX, centerY, Width=10, Height=3, pen=None, brush=None):
+        """
+        This should draw a figure that has a rectangle with the top border an solid line and the rectangle filled
+        with a hatch pattern
+        :param centerX:
+        :param centerY:
+        :param Width:
+        :param Height:
+        :return:
+        """
+        top = centerY
+        left = centerX - Width / 2
+        right = centerX + Width / 2
+        self.drawALine(centerX - Width / 2, centerY, centerX + Width / 2, centerY, pen=pen)
+        penOutline = qtg.QPen(qtc.Qt.NoPen)
+
+        self.drawARectangle(left, top, Width, Height, pen=penOutline, brush=brush)
+
+    def drawLinkage(self, stX, stY, enX, enY, radius=10, pen=None, brush=None):
+        if pen is None: pen = self.penLink
+        if brush is None: brush = self.brushLink
+        lin1 = RigidLink(stX, stY, enX, enY, radius, pen=pen, brush=brush)
+        self.scene.addItem(lin1)
+        return lin1
+
+    def drawPivot(self, x, y, ht, wd):
+        pivot = RigidPivotPoint(x, y, ht, wd, brush=self.brushPivot)
+        self.scene.addItem(pivot)
+        return pivot
+
